@@ -1,25 +1,35 @@
 /**************** RELEASE NOTES ****************/
-// 1.1 - 2015-02-07
-// - Add new URL for get status of Bell : ON | OFF
-// - Reset status of the bell in function resetAllStatusOnSensor()
-// - Add text to specify the type of Sensor requested in function sendAlertJeedom()
-// - Add in the startup program the version and programme name
-// /!\ Fix : At startup after test Alarm, reset variables
-// /!\ Issue : Temperature called two times ; Probably the buffer is too large...
-
-// 1.0 - 2015-02-07
-// - Update all URL for Alarm
-// - Add new URL for get status of alarm : ON | OFF
-// - At startup alarm is turned OFF
+/*
+1.2 | 2015-02-09 | Size = 21 252 octects
+   - All URL need to have "&" parameters at the end of the web string, upadte STR_WEB_END_PARAMETERS for new value
+   - Parse the web URL to get the value parameters in : handleTemperature() 
+   - Parse the web URL to get the value parameters in : sendAlertJeedom()
+   - Convert char * to Integer used in atoi((char *)arrValue[0]) in : handleTemperature() & sendAlertJeedom()
+   /!\ Issue : Temperature called two times ; Probably the buffer is too large...
+  
+1.1 | 2015-02-07 | Size = 21 342 octects
+   - Add new URL for get status of Bell : ON | OFF
+   - Reset status of the bell in function resetAllStatusOnSensor()
+   - Add text to specify the type of Sensor requested in function sendAlertJeedom()
+   - Add in the startup program the version and programme name
+   /!\ Fix : At startup after test Alarm, reset variables
+   /!\ Issue : Temperature called two times ; Probably the buffer is too large...
+  
+1.0 | 2015-02-07 | Size = 21 174 octects
+   - Update all URL for Alarm
+   - Add new URL for get status of alarm : ON | OFF
+   - At startup alarm is turned OFF
+*/
 /**************** RELEASE NOTES ****************/
 #include <EtherCard.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
 
-#define APP_NAME "arduiHomeSecurity"
-#define APP_VERSION "v1.1"
+#define APP_NAME "ardui HomeSecurity"
+#define APP_VERSION "v1.2"
 long previousMillis = 0;
 long intIntervalMotion = 500; 
+
 
 /* 
  * -----------------------------------------
@@ -93,7 +103,11 @@ static void initNetwork(void) {
  * ---  Web Server
  * -----------------------------------------
  */
+#define STR_WEB_END_PARAMETERS "&"
 BufferFiller bfillWebPage;
+char *arrParameter[1]; // Array for get the parameter
+char *arrValue[1]; // Array for get the values of the parameter
+
 /*
  * Function for render the Web page
  */
@@ -147,6 +161,7 @@ boolean blnTemp = false;
 float intTemperature = 0.01;
 char strTemperature[10];
 int intIdGetTemp = 0;
+
 /*
  * Get Temperature for one Dallas Sonde
  */
@@ -170,26 +185,12 @@ static void getTemperatureById(int idAddress) {
  * Get Temperature information from GET parameter
  */
 static void handleTemperature(void){
-  // Temperature : Sonde 0
-  if(strstr((char *)Ethernet::buffer + pos, "T=0") != 0) { 
-    blnTemp = true;
-    intIdGetTemp = 0;
-  }
-  // Temperature : Sonde 1
-  if(strstr((char *)Ethernet::buffer + pos, "T=1") != 0) { 
-    blnTemp = true;
-    intIdGetTemp = 1;
-  }
-  // Temperature : Sonde 2
-  if(strstr((char *)Ethernet::buffer + pos, "T=2") != 0) { 
-    blnTemp = true;
-    intIdGetTemp = 2;
-  }
-  // Temperature : Sonde 3
-  if(strstr((char *)Ethernet::buffer + pos, "T=3") != 0) { 
-    blnTemp = true;
-    intIdGetTemp = 3;
-  }
+  // Parse the Web URL
+  char *token = strtok((char *)Ethernet::buffer + pos, STR_WEB_END_PARAMETERS);  // Get everything up to the parameter
+  char *arrValue[1]; // Array for get the values of the parameter
+  strtok_r(token, "=", arrValue); // Split the data all values after the parameter will be register in the variable
+  // Convertion String to Integer with a cast in char *
+  intIdGetTemp = atoi((char *)arrValue[0]);
   // Temperature : Sonde 0
   if(blnTemp == true) { 
     blnTemp = false;
@@ -290,24 +291,24 @@ static void manageAlarmPosition(void) {
  * Send Alert
  */
 static void sendAlertJeedom(void) {
-  // Temp
-  String strType = "";
-  // Alarm : Sonde 0
-  if(strstr((char *)Ethernet::buffer + pos, "M=0") != 0) {intIdRequested = 0; intIdGetAlarm = arrAlarmStatusSensor[0]; strType = "Sensor Motion : ";}
-  if(strstr((char *)Ethernet::buffer + pos, "T=0") != 0) {intIdRequested = 0; intIdGetAlarm = arrAlarmStatusTamper[0]; strType = "Sensor Tamper : ";}
-  // Alarm : Sonde 1
-  if(strstr((char *)Ethernet::buffer + pos, "M=1") != 0) {intIdRequested = 1; intIdGetAlarm = arrAlarmStatusSensor[1]; strType = "Sensor Motion : ";}
-  if(strstr((char *)Ethernet::buffer + pos, "T=1") != 0) {intIdRequested = 1; intIdGetAlarm = arrAlarmStatusTamper[1]; strType = "Sensor Tamper : ";}
-  // Alarm : Sonde 2
-  if(strstr((char *)Ethernet::buffer + pos, "M=2") != 0) {intIdRequested = 2; intIdGetAlarm = arrAlarmStatusSensor[2]; strType = "Sensor Motion : ";}
-  if(strstr((char *)Ethernet::buffer + pos, "T=2") != 0) {intIdRequested = 2; intIdGetAlarm = arrAlarmStatusTamper[2]; strType = "Sensor Tamper : ";}
-  // Alarm : Sonde 3
-  if(strstr((char *)Ethernet::buffer + pos, "M=3") != 0) {intIdRequested = 3; intIdGetAlarm = arrAlarmStatusSensor[3]; strType = "Sensor Motion : ";}
-  if(strstr((char *)Ethernet::buffer + pos, "T=3") != 0) {intIdRequested = 3; intIdGetAlarm = arrAlarmStatusTamper[3]; strType = "Sensor Tamper : ";}
+  // Parse the Web URL
+  char *token = strtok((char *)Ethernet::buffer + pos, STR_WEB_END_PARAMETERS);  // Get everything up to the parameter
+  strtok_r(token, "?", arrParameter); // Split the data all values after the parameter will be register in the variable
+  strtok_r(arrParameter[0], "=", arrValue); // Split the data all values after the parameter will be register in the variable
+  // Convertion String to Integer with a cast in char *
+  intIdRequested = atoi((char *)arrValue[0]);
   // Log
   Serial.println("- - - - - START WEB REQUEST ");
   Serial.print(">>> ");
-  Serial.print(strType);
+  // If Motion
+  if(arrParameter[0] == "T") {
+    intIdGetAlarm = arrAlarmStatusSensor[intIdRequested]; 
+    Serial.print("Sensor Motion : ");
+  } else {
+    intIdGetAlarm = arrAlarmStatusTamper[intIdRequested]; 
+    Serial.print("Sensor Tamper : ");
+  }
+  // Log
   Serial.print(intIdRequested);
   Serial.print(" | Status is : ");
   Serial.println(intIdGetAlarm);
@@ -443,6 +444,7 @@ void loop (void) {
    * TEMPERATURE
    */
   if(strstr((char *)Ethernet::buffer + pos, "GET /sonde?") != 0) { 
+    blnTemp = true;
     handleTemperature();
     clearNetworkBuffer();
   }
