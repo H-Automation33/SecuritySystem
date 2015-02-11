@@ -1,7 +1,23 @@
+/**************** RELEASE NOTES ****************/
+// 1.1 - 2015-02-07
+// - Add new URL for get status of Bell : ON | OFF
+// - Reset status of the bell in function resetAllStatusOnSensor()
+// - Add text to specify the type of Sensor requested in function sendAlertJeedom()
+// - Add in the startup program the version and programme name
+// /!\ Fix : At startup after test Alarm, reset variables
+// /!\ Issue : Temperature called two times ; Probably the buffer is too large...
+
+// 1.0 - 2015-02-07
+// - Update all URL for Alarm
+// - Add new URL for get status of alarm : ON | OFF
+// - At startup alarm is turned OFF
+/**************** RELEASE NOTES ****************/
 #include <EtherCard.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
 
+#define APP_NAME "arduiHomeSecurity"
+#define APP_VERSION "v1.1"
 long previousMillis = 0;
 long intIntervalMotion = 500; 
 
@@ -81,14 +97,14 @@ BufferFiller bfillWebPage;
 /*
  * Function for render the Web page
  */
-static void renderWebPageAlarm(char strOutputWebPage[10]) {
+static void renderWebPageAlarm(int intOutputWebPage) {
   bfillWebPage = ether.tcpOffset();
   bfillWebPage.emit_p(PSTR(
     "HTTP/1.0 200 OK\r\n"
     "Content-Type: text/html\r\n"
     "Pragma: no-cache\r\n"
     "\r\n"
-    "$D"), strOutputWebPage);
+    "$D"), intOutputWebPage);
   ether.httpServerReply(bfillWebPage.position());
 }
 /*
@@ -131,9 +147,6 @@ boolean blnTemp = false;
 float intTemperature = 0.01;
 char strTemperature[10];
 int intIdGetTemp = 0;
-int intIdGetAlarm = 1;
-int intFlagAlarm = 1;
-int intIdRequested = 0;
 /*
  * Get Temperature for one Dallas Sonde
  */
@@ -188,7 +201,7 @@ static void handleTemperature(void){
     renderWebPageTemperature(strTemperature);
     Serial.println("- - - - - END WEB REQUEST");
   }
-  delay(2000);
+
 }
 
 /* 
@@ -197,13 +210,17 @@ static void handleTemperature(void){
  * -----------------------------------------
  */
 boolean blnAlarmActivated = false;
-
+int blnAlarmBellActivated = 1;
+int intIdGetAlarm = 1;
+int intFlagAlarm = 1;
+int intIdRequested = 0;
 /*
  * Activate Buzzer & Led
  */
 static void enableAlarm(void) {
   // Log
   intFlagAlarm = 0;
+  blnAlarmBellActivated = 0;
   Serial.println("!!! ALARM : Led & Buzzer Activated");
   uint8_t flashes=3;
   // Create a flash alarm
@@ -228,6 +245,7 @@ static void resetAllStatusOnSensor(void){
   }
   intIdGetAlarm = 1;
   intFlagAlarm = 1;
+  blnAlarmBellActivated = 1;
   Serial.println(">>> All status for Sensor motion reseted");
 }
 /*
@@ -237,53 +255,64 @@ static void manageAlarmPosition(void) {
   // Log
   Serial.println("- - - - - START WEB REQUEST ");
   int intStatusAlarm = 0;
-  // Check the URL
+  // Alarm ON
   if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-turned-on?") != 0) {
     blnAlarmActivated = true;
     intStatusAlarm = 1;
     Serial.println(">>> The alarm is turned ON  ");
   }
+  // Alarm OFF
   if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-turned-off?") != 0) {
     blnAlarmActivated = false;
+    intFlagAlarm = 1;
     intStatusAlarm = 1;
     Serial.println(">>> The alarm is turned OFF  ");
   }
+  // Alarm All status reseted
   if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-turned-reset?") != 0) {
     intStatusAlarm = 1;
     resetAllStatusOnSensor();
   }
+  // Alarm get status
   if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-turned-status?") != 0) {
     intStatusAlarm = 0;
     if(blnAlarmActivated == true) intStatusAlarm = 1;
   }
+  // Alarm get status for bell
+  if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-turned-bell?") != 0) {
+    intStatusAlarm = blnAlarmBellActivated;
+  }
   // Render Web Page
-  renderWebPageAlarm((char *)intStatusAlarm);
+  renderWebPageAlarm(intStatusAlarm);
   Serial.println("- - - - - END WEB REQUEST");
 }
 /*
  * Send Alert
  */
 static void sendAlertJeedom(void) {
+  // Temp
+  String strType = "";
   // Alarm : Sonde 0
-  if(strstr((char *)Ethernet::buffer + pos, "M=0") != 0) {intIdRequested = 0; intIdGetAlarm = arrAlarmStatusSensor[0];}
-  if(strstr((char *)Ethernet::buffer + pos, "T=0") != 0) {intIdRequested = 0; intIdGetAlarm = arrAlarmStatusTamper[0];}
+  if(strstr((char *)Ethernet::buffer + pos, "M=0") != 0) {intIdRequested = 0; intIdGetAlarm = arrAlarmStatusSensor[0]; strType = "Sensor Motion : ";}
+  if(strstr((char *)Ethernet::buffer + pos, "T=0") != 0) {intIdRequested = 0; intIdGetAlarm = arrAlarmStatusTamper[0]; strType = "Sensor Tamper : ";}
   // Alarm : Sonde 1
-  if(strstr((char *)Ethernet::buffer + pos, "M=1") != 0) {intIdRequested = 1; intIdGetAlarm = arrAlarmStatusSensor[1];}
-  if(strstr((char *)Ethernet::buffer + pos, "T=1") != 0) {intIdRequested = 1; intIdGetAlarm = arrAlarmStatusTamper[1];}
+  if(strstr((char *)Ethernet::buffer + pos, "M=1") != 0) {intIdRequested = 1; intIdGetAlarm = arrAlarmStatusSensor[1]; strType = "Sensor Motion : ";}
+  if(strstr((char *)Ethernet::buffer + pos, "T=1") != 0) {intIdRequested = 1; intIdGetAlarm = arrAlarmStatusTamper[1]; strType = "Sensor Tamper : ";}
   // Alarm : Sonde 2
-  if(strstr((char *)Ethernet::buffer + pos, "M=2") != 0) {intIdRequested = 2; intIdGetAlarm = arrAlarmStatusSensor[2];}
-  if(strstr((char *)Ethernet::buffer + pos, "T=2") != 0) {intIdRequested = 2; intIdGetAlarm = arrAlarmStatusTamper[2];}
+  if(strstr((char *)Ethernet::buffer + pos, "M=2") != 0) {intIdRequested = 2; intIdGetAlarm = arrAlarmStatusSensor[2]; strType = "Sensor Motion : ";}
+  if(strstr((char *)Ethernet::buffer + pos, "T=2") != 0) {intIdRequested = 2; intIdGetAlarm = arrAlarmStatusTamper[2]; strType = "Sensor Tamper : ";}
   // Alarm : Sonde 3
-  if(strstr((char *)Ethernet::buffer + pos, "M=3") != 0) {intIdRequested = 3; intIdGetAlarm = arrAlarmStatusSensor[3];}
-  if(strstr((char *)Ethernet::buffer + pos, "T=3") != 0) {intIdRequested = 3; intIdGetAlarm = arrAlarmStatusTamper[3];}
+  if(strstr((char *)Ethernet::buffer + pos, "M=3") != 0) {intIdRequested = 3; intIdGetAlarm = arrAlarmStatusSensor[3]; strType = "Sensor Motion : ";}
+  if(strstr((char *)Ethernet::buffer + pos, "T=3") != 0) {intIdRequested = 3; intIdGetAlarm = arrAlarmStatusTamper[3]; strType = "Sensor Tamper : ";}
   // Log
   Serial.println("- - - - - START WEB REQUEST ");
-  Serial.print(">>> Sensor : ");
+  Serial.print(">>> ");
+  Serial.print(strType);
   Serial.print(intIdRequested);
   Serial.print(" | Status is : ");
   Serial.println(intIdGetAlarm);
   // Render Web Page
-  renderWebPageAlarm((char *)intIdGetAlarm);
+  renderWebPageAlarm(intIdGetAlarm);
   Serial.println("- - - - - END WEB REQUEST");
 }
 
@@ -327,6 +356,9 @@ static void initAlarm(void) {
   digitalWrite(INT_PIN_LED, LOW);
   // Test on startup
   enableAlarm();
+  // Reset status after 
+  intFlagAlarm = 1;
+  blnAlarmBellActivated = 1;
   // For each sensor
   for(int intRow=0; intRow < INT_NB_SENSORS; intRow++){
     // If it's enabled
@@ -357,20 +389,22 @@ void setup(void) {
   Serial.begin(57600);
   Serial.println("");
   Serial.println("- - - - - - - - - - - - - - -");
-  Serial.println(">>> Start setup....");
+  Serial.print("  ");
+  Serial.print(APP_NAME);
+  Serial.print(" - ");
+  Serial.println(APP_VERSION);
   Serial.println("- - - - - - - - - - - - - - -");
+  Serial.println("");
+  Serial.println(">>> Start setup....");
   Serial.println("");
   // STEP 01 : Initialise Alarm
   initAlarm();
   // STEP 02 : Initialize Network
   initNetwork();
   // Log
-  Serial.println("");
   Serial.println(">>> ALARM IS OFF  ");
   Serial.println("");
-  Serial.println("- - - - - - - - - - - - - - -");
   Serial.println(">>> Ended setup....");
-  Serial.println("- - - - - - - - - - - - - - -");
   Serial.println("");
 }
 
@@ -395,6 +429,7 @@ void loop (void) {
   if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-status?") != 0) { 
     sendAlertJeedom();
     clearNetworkBuffer();
+    // For stop the Bell
     if(intFlagAlarm == 0) {
       intFlagAlarm = 1;
     }   
