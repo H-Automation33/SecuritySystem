@@ -1,5 +1,9 @@
 /**************** RELEASE NOTES ****************/
 /*
+1.3 | 2015-02-10 | Size = 21 358 octects
+   /!\ Fix : the parameters was never saved > only tamper requested in function sendAlertJeedom and same value sended > 1
+   /!\ Issue : Temperature called two times ; Probably the buffer is too large...
+   
 1.2 | 2015-02-09 | Size = 21 252 octects
    - All URL need to have "&" parameters at the end of the web string, upadte STR_WEB_END_PARAMETERS for new value
    - Parse the web URL to get the value parameters in : handleTemperature() 
@@ -278,10 +282,12 @@ static void manageAlarmPosition(void) {
   if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-turned-status?") != 0) {
     intStatusAlarm = 0;
     if(blnAlarmActivated == true) intStatusAlarm = 1;
+    Serial.println(">>> The alarm status sended");
   }
   // Alarm get status for bell
   if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-turned-bell?") != 0) {
     intStatusAlarm = blnAlarmBellActivated;
+    Serial.println(">>> The bell status sended");
   }
   // Render Web Page
   renderWebPageAlarm(intStatusAlarm);
@@ -294,18 +300,18 @@ static void sendAlertJeedom(void) {
   // Parse the Web URL
   char *token = strtok((char *)Ethernet::buffer + pos, STR_WEB_END_PARAMETERS);  // Get everything up to the parameter
   strtok_r(token, "?", arrParameter); // Split the data all values after the parameter will be register in the variable
-  strtok_r(arrParameter[0], "=", arrValue); // Split the data all values after the parameter will be register in the variable
+  char *arrGetParameter = strtok_r(arrParameter[0], "=", arrValue); // Split the data all values after the parameter will be register in the variable
   // Convertion String to Integer with a cast in char *
   intIdRequested = atoi((char *)arrValue[0]);
   // Log
   Serial.println("- - - - - START WEB REQUEST ");
   Serial.print(">>> ");
-  // If Motion
-  if(arrParameter[0] == "T") {
-    intIdGetAlarm = arrAlarmStatusSensor[intIdRequested]; 
+  // If Motion 
+  if(strstr(arrGetParameter, "M") != 0) {
+    intIdGetAlarm = arrAlarmStatusSensor[(byte)intIdRequested];
     Serial.print("Sensor Motion : ");
   } else {
-    intIdGetAlarm = arrAlarmStatusTamper[intIdRequested]; 
+    intIdGetAlarm = arrAlarmStatusTamper[(byte)intIdRequested];
     Serial.print("Sensor Tamper : ");
   }
   // Log
@@ -331,8 +337,8 @@ static void handleMotion(void) {
       if(intPinSensorValue == 1) {
         Serial.print("!!! ALARM : Motion detected on : ");
         Serial.println(arrSensorRoom[intRowMotion]);
-        arrAlarmStatusSensor[intRowMotion] = 0;
-        enableAlarm(); 
+        arrAlarmStatusSensor[intRowMotion] = 0; 
+        enableAlarm();
       }
       // Box
       if(intPinTamperValue == 1) {
