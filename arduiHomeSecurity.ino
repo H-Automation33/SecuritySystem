@@ -1,6 +1,11 @@
 /**************** RELEASE NOTES ****************/
 /*
-1.4 | 2015-02-17 | Size = 21 728 octects
+1.5 | 2015-02-17 | Size = 21 766 octects
+   /!\ Fix : All motion sensor are enabled when one motion are activated in function manageMotionPosition()
+   /!\ Fix : Increase size of case 150 to 130 (at 100 > The web pase still not complete rendered)
+   /!\ Issue : Temperature called two times ; Probably the buffer is too large...
+   
+1.4 | 2015-02-16 | Size = 21 728 octects
    - Allow to enable motion sensor on web page
    - Get Status of Motion on web page, add new produre : manageMotionPosition() ; by default all motion is OFF
    - By default all motion enable ; after init all motion put as OFF and can be managed from the web
@@ -36,7 +41,7 @@
 #include <DallasTemperature.h>
 
 #define APP_NAME "ardui HomeSecurity"
-#define APP_VERSION "v1.4"
+#define APP_VERSION "v1.5"
 long previousMillis = 0;
 long intIntervalMotion = 500; 
 
@@ -48,7 +53,7 @@ long intIntervalMotion = 500;
  */
 // Const
 #define INT_PIN_NETWORK 10
-#define INT_LAN_BUFFER 150
+#define INT_LAN_BUFFER 130
 // Network Information
 static byte mymac[] = { 0x74,0x69,0x69,0x2D,0x30,0x31 }; 
 static byte myip[] = { 192,168,21,20 };
@@ -160,7 +165,7 @@ int arrSensorList[INT_NB_SENSORS] ={1, 1, 1, 1}; // List Sensor Enabled
 int arrBusSensor[INT_NB_SENSORS] = {2, 4, 6, 8}; // Connection Bus ID for Sensor
 int arrBusTamper[INT_NB_SENSORS] = {3, 5, 7, 9}; // Connection Bus ID for Tamper
 int arrNumberMaxMotion[INT_NB_SENSORS] = {4, 4, 4, 4}; // Max Motion autorized for each sensor
-String arrSensorRoom[INT_NB_SENSORS] = {"Salon", "Cuisine", "Couloir", "N/A"}; // List Sensor Name
+String arrSensorRoom[INT_NB_SENSORS] = {"Salon","Cuisine","Couloir","Other"}; // List Sensor Name
 int arrBusTemperature[INT_NB_SENSORS] = {A2, A3, A4, A5}; // Connection Bus ID for Temperature
 int arrValueTemperature[INT_NB_SENSORS] = {0, 0, 0, 0}; // Connection Bus ID for Temperature
 // Variables
@@ -306,25 +311,26 @@ static void manageAlarmPosition(void) {
 static void manageMotionPosition(void) {
   // Variable
   int intStatusMotion = 0;
-  // Put Sensor OFF
-  if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-motion-off?") != 0) {
-    intStatusMotion = 0;
-  }
-  // Put Sensor ON
-  if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-motion-on?") != 0) {
-    intStatusMotion = 1;
-  }
-  // Get Sensor status
-  if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-motion-status?") != 0) {
-    intStatusMotion = arrSensorList[intIdRequested];
-  }
-  // Parse the Web URL
+    // Parse the Web URL
   char *token = strtok((char *)Ethernet::buffer + pos, STR_WEB_END_PARAMETERS);  // Get everything up to the parameter
   char *arrValue[1]; // Array for get the values of the parameter
   strtok_r(token, "=", arrValue); // Split the data all values after the parameter will be register in the variable
   // Convertion String to Integer with a cast in char *
   intIdRequested = atoi((char *)arrValue[0]);
-  arrSensorList[intIdRequested] = intStatusMotion;
+  // Put Sensor OFF
+  if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-motion-off?") != 0) {
+    intStatusMotion = 0;
+    arrSensorList[(byte)intIdRequested] = intStatusMotion;
+  }
+  // Put Sensor ON
+  if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-motion-on?") != 0) {
+    intStatusMotion = 1;
+    arrSensorList[(byte)intIdRequested] = intStatusMotion;
+  }
+  // Get Sensor status
+  if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-motion-status?") != 0) {
+    intStatusMotion = arrSensorList[(byte)intIdRequested];
+  }
   // Log
   Serial.println("- - - - - START WEB REQUEST ");
   Serial.print(">>> Motion ID : ");
@@ -410,22 +416,19 @@ static void initAlarm(void) {
   intFlagAlarm = 1;
   blnAlarmBellActivated = 1;
   // For each sensor
-  for(int intRow=0; intRow < INT_NB_SENSORS; intRow++){
-    // If it's enabled
-    if(arrSensorList[intRow] > 0) {
-      // Log Console
-      Serial.print(">>> Alarm activated on Room : ");
-      Serial.println(arrSensorRoom[intRow]);
-      Serial.println(">>> Register Motion Sensor & Tamper as [INPUT] & [PULL-UP RESISTOR]");  
-      // PIR & TAMPER = INPUT
-      pinMode(arrBusSensor[intRow], INPUT);  
-      pinMode(arrBusTamper[intRow], INPUT);
-      // PIR & TAMPER = PULL-UP RESISTOR ENABLE
-      digitalWrite(arrBusSensor[intRow], HIGH);  
-      digitalWrite(arrBusTamper[intRow], HIGH);
-      // Put the value to OFF
-      arrSensorList[intRow] = 0;
-    } 
+  for(int intRow=0;intRow<INT_NB_SENSORS;intRow++){
+    // Log Console
+    Serial.print(">>> Alarm activated on Room : ");
+    Serial.println(arrSensorRoom[intRow]);
+    Serial.println(">>> Register Motion Sensor & Tamper as [INPUT] & [PULL-UP RESISTOR]");  
+    // PIR & TAMPER = INPUT
+    pinMode(arrBusSensor[intRow], INPUT);  
+    pinMode(arrBusTamper[intRow], INPUT);
+    // PIR & TAMPER = PULL-UP RESISTOR ENABLE
+    digitalWrite(arrBusSensor[intRow], HIGH);  
+    digitalWrite(arrBusTamper[intRow], HIGH);
+    // Put the value to OFF
+    arrSensorList[(byte)intRow] = 0;
   }
 }
 
