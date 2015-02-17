@@ -1,5 +1,11 @@
 /**************** RELEASE NOTES ****************/
 /*
+1.4 | 2015-02-17 | Size = 21 728 octects
+   - Allow to enable motion sensor on web page
+   - Get Status of Motion on web page, add new produre : manageMotionPosition() ; by default all motion is OFF
+   - By default all motion enable ; after init all motion put as OFF and can be managed from the web
+   /!\ Issue : Temperature called two times ; Probably the buffer is too large...
+   
 1.3 | 2015-02-10 | Size = 21 358 octects
    /!\ Fix : the parameters was never saved > only tamper requested in function sendAlertJeedom and same value sended > 1
    /!\ Issue : Temperature called two times ; Probably the buffer is too large...
@@ -30,7 +36,7 @@
 #include <DallasTemperature.h>
 
 #define APP_NAME "ardui HomeSecurity"
-#define APP_VERSION "v1.2"
+#define APP_VERSION "v1.4"
 long previousMillis = 0;
 long intIntervalMotion = 500; 
 
@@ -42,7 +48,7 @@ long intIntervalMotion = 500;
  */
 // Const
 #define INT_PIN_NETWORK 10
-#define INT_LAN_BUFFER 200
+#define INT_LAN_BUFFER 150
 // Network Information
 static byte mymac[] = { 0x74,0x69,0x69,0x2D,0x30,0x31 }; 
 static byte myip[] = { 192,168,21,20 };
@@ -150,11 +156,11 @@ static void renderWebPageTemperature(char strOutputWebPage[10]) {
 // Variables :: Array
 int arrAlarmStatusSensor[INT_NB_SENSORS] ={1, 1, 1, 1}; // Statut du capteur 1 = OK ; 0 = KO
 int arrAlarmStatusTamper[INT_NB_SENSORS] ={1, 1, 1, 1}; // Statut du capteur 1 = OK ; 0 = KO
-int arrSensorList[INT_NB_SENSORS] ={0, 0, 0, 1}; // List Sensor Enabled
+int arrSensorList[INT_NB_SENSORS] ={1, 1, 1, 1}; // List Sensor Enabled
 int arrBusSensor[INT_NB_SENSORS] = {2, 4, 6, 8}; // Connection Bus ID for Sensor
 int arrBusTamper[INT_NB_SENSORS] = {3, 5, 7, 9}; // Connection Bus ID for Tamper
 int arrNumberMaxMotion[INT_NB_SENSORS] = {4, 4, 4, 4}; // Max Motion autorized for each sensor
-String arrSensorRoom[INT_NB_SENSORS] = {"Salon", "Cuisine", "Entree", "Bureau"}; // List Sensor Name
+String arrSensorRoom[INT_NB_SENSORS] = {"Salon", "Cuisine", "Couloir", "N/A"}; // List Sensor Name
 int arrBusTemperature[INT_NB_SENSORS] = {A2, A3, A4, A5}; // Connection Bus ID for Temperature
 int arrValueTemperature[INT_NB_SENSORS] = {0, 0, 0, 0}; // Connection Bus ID for Temperature
 // Variables
@@ -293,6 +299,43 @@ static void manageAlarmPosition(void) {
   renderWebPageAlarm(intStatusAlarm);
   Serial.println("- - - - - END WEB REQUEST");
 }
+
+/*
+ * get Action from  Jeedom : on / off / status
+ */
+static void manageMotionPosition(void) {
+  // Variable
+  int intStatusMotion = 0;
+  // Put Sensor OFF
+  if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-motion-off?") != 0) {
+    intStatusMotion = 0;
+  }
+  // Put Sensor ON
+  if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-motion-on?") != 0) {
+    intStatusMotion = 1;
+  }
+  // Get Sensor status
+  if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-motion-status?") != 0) {
+    intStatusMotion = arrSensorList[intIdRequested];
+  }
+  // Parse the Web URL
+  char *token = strtok((char *)Ethernet::buffer + pos, STR_WEB_END_PARAMETERS);  // Get everything up to the parameter
+  char *arrValue[1]; // Array for get the values of the parameter
+  strtok_r(token, "=", arrValue); // Split the data all values after the parameter will be register in the variable
+  // Convertion String to Integer with a cast in char *
+  intIdRequested = atoi((char *)arrValue[0]);
+  arrSensorList[intIdRequested] = intStatusMotion;
+  // Log
+  Serial.println("- - - - - START WEB REQUEST ");
+  Serial.print(">>> Motion ID : ");
+  Serial.print(intIdRequested);
+  Serial.print(" | The status is : ");
+  Serial.println(intStatusMotion);
+  // Render Web Page
+  renderWebPageAlarm(intStatusMotion);
+  Serial.println("- - - - - END WEB REQUEST");
+}
+
 /*
  * Send Alert
  */
@@ -380,6 +423,8 @@ static void initAlarm(void) {
       // PIR & TAMPER = PULL-UP RESISTOR ENABLE
       digitalWrite(arrBusSensor[intRow], HIGH);  
       digitalWrite(arrBusTamper[intRow], HIGH);
+      // Put the value to OFF
+      arrSensorList[intRow] = 0;
     } 
   }
 }
@@ -440,6 +485,11 @@ void loop (void) {
     if(intFlagAlarm == 0) {
       intFlagAlarm = 1;
     }   
+  }
+  // Web Request...Manage position of Motion Sensor
+  if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-motion") != 0) { 
+    manageMotionPosition();
+    clearNetworkBuffer();    
   }
   // Web Request...for turned on
   if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-turned") != 0) { 
