@@ -1,5 +1,18 @@
 /**************** RELEASE NOTES ****************/
 /*
+2.0 | 2015-02-21 | Size = 22 374 octects
+   - Rebuild the program : more simply
+   - Reformat the URL for Motion & Alarm & Bell like this : [motion|alarm|bell]-admin-[off|on|position|status] 
+   - Only two function for web page : renderWebValue[Binary | Decimal]();
+   - Only three functions : getInfoAlarmAdmin() = Administrate alarm | getInfoBellAdmin() = Administrate the bell | getInfoEquipements() = Check all equipements
+   - Use MCP 23017 Library for connect all equipements and have more pin ; default address = 0x20 (=0)
+   - Add 3 static vars for Siren Outdoor
+   - Add 2 static vars for Siren Indoor
+   - Add 1 static var for Siren Box
+   - 90% of Serial.print is disabled
+   - Add function for manage the Siren : Box & Indoor & Outdoor
+   - Add flag for Siren > Used or not ; By default = Siren Box ON | Siren Outdoor & Indoor OFF
+  
 1.5 | 2015-02-17 | Size = 21 766 octects
    /!\ Fix : All motion sensor are enabled when one motion are activated in function manageMotionPosition()
    /!\ Fix : Increase size of case 150 to 130 (at 100 > The web pase still not complete rendered)
@@ -39,12 +52,13 @@
 #include <EtherCard.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include <Wire.h>
+#include <Adafruit_MCP23017.h>
 
 #define APP_NAME "ardui HomeSecurity"
-#define APP_VERSION "v1.5"
-long previousMillis = 0;
-long intIntervalMotion = 500; 
+#define APP_VERSION "v2.0"
 
+#define INT_NB_SENSORS 3
 
 /* 
  * -----------------------------------------
@@ -54,6 +68,7 @@ long intIntervalMotion = 500;
 // Const
 #define INT_PIN_NETWORK 10
 #define INT_LAN_BUFFER 130
+
 // Network Information
 static byte mymac[] = { 0x74,0x69,0x69,0x2D,0x30,0x31 }; 
 static byte myip[] = { 192,168,21,20 };
@@ -63,9 +78,8 @@ static byte dns[] = { 192,168,21,1 };
 byte Ethernet::buffer[INT_LAN_BUFFER];
 int intHostPort = 80;
 word pos;
-/*
- * Clear cache
- */
+
+// Clear Cache
 static void clearNetworkBuffer(void){
   // Clear buffer
   for(int i=0;i<INT_LAN_BUFFER;i++){
@@ -73,19 +87,13 @@ static void clearNetworkBuffer(void){
   }
 }
   
-/*
- * NETWORK : Called when a ping comes in (replies to it are automatic)
- */
+// Called when a ping comes in (replies to it are automatic)
 static void gotPinged (byte* ptr) {
   ether.printIp(">>> Ping received from: ", ptr);
 }
 
-/*
- * NETWORK : Initialise inferface
- */
+// Initialise inferface
 static void initNetwork(void) {
-  // Log
-  Serial.println(">>> Network configuration ongoing...");
   if (ether.begin(sizeof Ethernet::buffer, mymac, INT_PIN_NETWORK) == 0) {
     Serial.println( "Failed to access Ethernet controller");
   }
@@ -97,20 +105,8 @@ static void initNetwork(void) {
   ether.mymask[1] = mymask[1];
   ether.mymask[2] = mymask[2];
   ether.mymask[3] = mymask[3];
-  // DNS
-  ether.dnsip[0] = dns[0];
-  ether.dnsip[1] = dns[1];
-  ether.dnsip[2] = dns[2];
-  ether.dnsip[3] = dns[3];
-  // Log
-  ether.printIp(">>> Network IP : ", ether.myip);
-  ether.printIp(">>> Network Netmask : ", ether.mymask);
-  ether.printIp(">>> Network Gateway : ", ether.gwip);
-  ether.printIp(">>> Network DNS : ", ether.dnsip);
   // call this to report others pinging us
   ether.registerPingCallback(gotPinged);
-  // Log
-  Serial.println(">>> Network complete...");
 }
 
 /* 
@@ -122,11 +118,8 @@ static void initNetwork(void) {
 BufferFiller bfillWebPage;
 char *arrParameter[1]; // Array for get the parameter
 char *arrValue[1]; // Array for get the values of the parameter
-
-/*
- * Function for render the Web page
- */
-static void renderWebPageAlarm(int intOutputWebPage) {
+// Send a value via web server
+static void renderWebValueBinary(int intOutputWebPage) {
   bfillWebPage = ether.tcpOffset();
   bfillWebPage.emit_p(PSTR(
     "HTTP/1.0 200 OK\r\n"
@@ -136,10 +129,8 @@ static void renderWebPageAlarm(int intOutputWebPage) {
     "$D"), intOutputWebPage);
   ether.httpServerReply(bfillWebPage.position());
 }
-/*
- * Function for render the Web page
- */
-static void renderWebPageTemperature(char strOutputWebPage[10]) {
+// Send a value via web server
+static void renderWebValueDecimal(char strOutputWebPage[10]) {
   bfillWebPage = ether.tcpOffset();
   bfillWebPage.emit_p(PSTR(
     "HTTP/1.0 200 OK\r\n"
@@ -154,70 +145,30 @@ static void renderWebPageTemperature(char strOutputWebPage[10]) {
  * ---  Temperature
  * -----------------------------------------
  */
-// Const
-#define INT_NB_SENSORS 4
-#define INT_PIN_LED A0
-#define INT_PIN_BUZZER A1
-// Variables :: Array
-int arrAlarmStatusSensor[INT_NB_SENSORS] ={1, 1, 1, 1}; // Statut du capteur 1 = OK ; 0 = KO
-int arrAlarmStatusTamper[INT_NB_SENSORS] ={1, 1, 1, 1}; // Statut du capteur 1 = OK ; 0 = KO
-int arrSensorList[INT_NB_SENSORS] ={1, 1, 1, 1}; // List Sensor Enabled
-int arrBusSensor[INT_NB_SENSORS] = {2, 4, 6, 8}; // Connection Bus ID for Sensor
-int arrBusTamper[INT_NB_SENSORS] = {3, 5, 7, 9}; // Connection Bus ID for Tamper
-int arrNumberMaxMotion[INT_NB_SENSORS] = {4, 4, 4, 4}; // Max Motion autorized for each sensor
-String arrSensorRoom[INT_NB_SENSORS] = {"Salon","Cuisine","Couloir","Other"}; // List Sensor Name
-int arrBusTemperature[INT_NB_SENSORS] = {A2, A3, A4, A5}; // Connection Bus ID for Temperature
-int arrValueTemperature[INT_NB_SENSORS] = {0, 0, 0, 0}; // Connection Bus ID for Temperature
-// Variables
-int intPinSensorValue = 0;
-int intPinTamperValue = 0;
-String blnPortStatus = "";
-boolean blnTemp = false;
+int arrBusTemperature[INT_NB_SENSORS] = {3, 4, 5}; // Connection Bus ID for Temperature
 float intTemperature = 0.01;
 char strTemperature[10];
 int intIdGetTemp = 0;
 
-/*
- * Get Temperature for one Dallas Sonde
- */
-static void getTemperatureById(int idAddress) {
-  // Variale
-  byte intAddress = arrBusTemperature[idAddress];
-  // Start up the library
-  OneWire oneWire(intAddress);
-  DallasTemperature sensors(&oneWire);
-  sensors.begin();
-  sensors.requestTemperatures();
-  // Log
-  intTemperature = sensors.getTempCByIndex(0);
-  Serial.print(">>> Pin : ");
-  Serial.print(intAddress);
-  Serial.print(" | Temperature is : ");
-  Serial.print(intTemperature);
-  Serial.println(" \260C");
-}
-/*
- * Get Temperature information from GET parameter
- */
-static void handleTemperature(void){
+// Get Temperature information from GET parameter
+static void getTemperature(void){
   // Parse the Web URL
   char *token = strtok((char *)Ethernet::buffer + pos, STR_WEB_END_PARAMETERS);  // Get everything up to the parameter
   char *arrValue[1]; // Array for get the values of the parameter
   strtok_r(token, "=", arrValue); // Split the data all values after the parameter will be register in the variable
   // Convertion String to Integer with a cast in char *
   intIdGetTemp = atoi((char *)arrValue[0]);
-  // Temperature : Sonde 0
-  if(blnTemp == true) { 
-    blnTemp = false;
-    Serial.println("- - - - - START WEB REQUEST ");
-    getTemperatureById(intIdGetTemp);
-    // Format value
-    dtostrf(intTemperature,6,2,strTemperature);
-    // Render Web Page
-    renderWebPageTemperature(strTemperature);
-    Serial.println("- - - - - END WEB REQUEST");
-  }
-
+  // Get The value on Dallas Temperature
+  byte intAddress = arrBusTemperature[intIdGetTemp];
+  OneWire oneWire(intAddress);
+  DallasTemperature sensors(&oneWire);
+  sensors.begin();
+  sensors.requestTemperatures();
+  intTemperature = sensors.getTempCByIndex(0);
+  // Send value
+  dtostrf(intTemperature,6,2,strTemperature);
+  renderWebValueDecimal(strTemperature);
+  //Serial.println("Request : " + (String)intIdGetTemp + " ; Value : " + (String)strTemperature + " \260C");
 }
 
 /* 
@@ -225,250 +176,303 @@ static void handleTemperature(void){
  * ---  ALARM
  * -----------------------------------------
  */
+// MCP
+Adafruit_MCP23017 mcpEquipements;
+  
+// Varialbes
+int arrAlarmStatusSensor[INT_NB_SENSORS] ={1, 1, 1}; // Statut du capteur 1 = OK ; 0 = KO
+int arrAlarmStatusTamper[INT_NB_SENSORS] ={1, 1, 1}; // Statut du capteur 1 = OK ; 0 = KO
+int arrSensorList[INT_NB_SENSORS] ={1, 1, 1}; // List Sensor Enabled
+int arrBusSensor[INT_NB_SENSORS] = {0, 2, 4}; // Connection Bus ID for Sensor
+int arrBusTamper[INT_NB_SENSORS] = {1, 3, 5}; // Connection Bus ID for Tamper
+String arrSensorRoom[INT_NB_SENSORS] = {"Salon","Cuisine","Couloir"}; // List Sensor Name
+
+// Bell OutDoor
+#define INT_BELL_OUTDOOR_TAMPER 13
+#define INT_BELL_OUTDOOR_LED 14
+#define INT_BELL_OUTDOOR_SIREN 15
+// Bell InDoor
+#define INT_BELL_INDOOR_LED 10
+#define INT_BELL_INDOOR_SIREN 11
+// Bell InDoor
+#define INT_BELL_BOX_SIREN 8
+
+// For Loop
+long previousMillis = 0;
+long intIntervalMotion = 200;
+// Put this value to 1 if you want to use the tamper
+#define INT_ALARM_CHECK_TAMPER 0
+// Variables
 boolean blnAlarmActivated = false;
-int blnAlarmBellActivated = 1;
+int blnBellBoxActivated = 1;
+int blnBellOutdoorActivated = 1;
+int blnBellIndoorActivated = 1;
+// for Bell
+int intFlagBellBox = 1;
+int intFlagBellIndoor = 0;
+int intFlagBellOutdoor = 0;
+// For Alarm
 int intIdGetAlarm = 1;
 int intFlagAlarm = 1;
 int intIdRequested = 0;
-/*
- * Activate Buzzer & Led
- */
-static void enableAlarm(void) {
+// Vars
+int intPinSensorValue = 0;
+int intPinTamperValue = 0;
+
+// Enable box buzzer
+static void activeBell(void) {
   // Log
   intFlagAlarm = 0;
-  blnAlarmBellActivated = 0;
-  Serial.println("!!! ALARM : Led & Buzzer Activated");
-  uint8_t flashes=3;
-  // Create a flash alarm
-  for(int i=0;i<flashes;i++){  
-    delay(100);
-    digitalWrite(INT_PIN_BUZZER, HIGH);
-    digitalWrite(INT_PIN_LED, HIGH);
-    delay(100);
-    digitalWrite(INT_PIN_BUZZER, LOW);
-    digitalWrite(INT_PIN_LED, LOW);
+  // BELL INDOOR
+  if(intFlagBellIndoor == 1) {
+    blnBellIndoorActivated = 0;
+    mcpEquipements.digitalWrite(INT_BELL_OUTDOOR_LED, HIGH);
+    mcpEquipements.digitalWrite(INT_BELL_OUTDOOR_SIREN, HIGH);
   }
-}
-
-/*
- * Clear alert saved
- */
-static void resetAllStatusOnSensor(void){
-  // Clear buffer
-  for(int j=0;j<INT_NB_SENSORS;j++){
-    arrAlarmStatusSensor[j] = 1;
-    arrAlarmStatusTamper[j] = 1;
+  // BELL OUTDOOR
+  if(intFlagBellOutdoor == 1) {
+    blnBellOutdoorActivated = 0;
+    mcpEquipements.digitalWrite(INT_BELL_INDOOR_LED, HIGH);
+    mcpEquipements.digitalWrite(INT_BELL_INDOOR_SIREN, HIGH);
   }
-  intIdGetAlarm = 1;
-  intFlagAlarm = 1;
-  blnAlarmBellActivated = 1;
-  Serial.println(">>> All status for Sensor motion reseted");
-}
-/*
- * get Action from  Jeedom : on / off / reset
- */
-static void manageAlarmPosition(void) {
-  // Log
-  Serial.println("- - - - - START WEB REQUEST ");
-  int intStatusAlarm = 0;
-  // Alarm ON
-  if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-turned-on?") != 0) {
-    blnAlarmActivated = true;
-    intStatusAlarm = 1;
-    Serial.println(">>> The alarm is turned ON  ");
-  }
-  // Alarm OFF
-  if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-turned-off?") != 0) {
-    blnAlarmActivated = false;
-    intFlagAlarm = 1;
-    intStatusAlarm = 1;
-    Serial.println(">>> The alarm is turned OFF  ");
-  }
-  // Alarm All status reseted
-  if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-turned-reset?") != 0) {
-    intStatusAlarm = 1;
-    resetAllStatusOnSensor();
-  }
-  // Alarm get status
-  if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-turned-status?") != 0) {
-    intStatusAlarm = 0;
-    if(blnAlarmActivated == true) intStatusAlarm = 1;
-    Serial.println(">>> The alarm status sended");
-  }
-  // Alarm get status for bell
-  if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-turned-bell?") != 0) {
-    intStatusAlarm = blnAlarmBellActivated;
-    Serial.println(">>> The bell status sended");
-  }
-  // Render Web Page
-  renderWebPageAlarm(intStatusAlarm);
-  Serial.println("- - - - - END WEB REQUEST");
-}
-
-/*
- * get Action from  Jeedom : on / off / status
- */
-static void manageMotionPosition(void) {
-  // Variable
-  int intStatusMotion = 0;
-    // Parse the Web URL
-  char *token = strtok((char *)Ethernet::buffer + pos, STR_WEB_END_PARAMETERS);  // Get everything up to the parameter
-  char *arrValue[1]; // Array for get the values of the parameter
-  strtok_r(token, "=", arrValue); // Split the data all values after the parameter will be register in the variable
-  // Convertion String to Integer with a cast in char *
-  intIdRequested = atoi((char *)arrValue[0]);
-  // Put Sensor OFF
-  if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-motion-off?") != 0) {
-    intStatusMotion = 0;
-    arrSensorList[(byte)intIdRequested] = intStatusMotion;
-  }
-  // Put Sensor ON
-  if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-motion-on?") != 0) {
-    intStatusMotion = 1;
-    arrSensorList[(byte)intIdRequested] = intStatusMotion;
-  }
-  // Get Sensor status
-  if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-motion-status?") != 0) {
-    intStatusMotion = arrSensorList[(byte)intIdRequested];
-  }
-  // Log
-  Serial.println("- - - - - START WEB REQUEST ");
-  Serial.print(">>> Motion ID : ");
-  Serial.print(intIdRequested);
-  Serial.print(" | The status is : ");
-  Serial.println(intStatusMotion);
-  // Render Web Page
-  renderWebPageAlarm(intStatusMotion);
-  Serial.println("- - - - - END WEB REQUEST");
-}
-
-/*
- * Send Alert
- */
-static void sendAlertJeedom(void) {
-  // Parse the Web URL
-  char *token = strtok((char *)Ethernet::buffer + pos, STR_WEB_END_PARAMETERS);  // Get everything up to the parameter
-  strtok_r(token, "?", arrParameter); // Split the data all values after the parameter will be register in the variable
-  char *arrGetParameter = strtok_r(arrParameter[0], "=", arrValue); // Split the data all values after the parameter will be register in the variable
-  // Convertion String to Integer with a cast in char *
-  intIdRequested = atoi((char *)arrValue[0]);
-  // Log
-  Serial.println("- - - - - START WEB REQUEST ");
-  Serial.print(">>> ");
-  // If Motion 
-  if(strstr(arrGetParameter, "M") != 0) {
-    intIdGetAlarm = arrAlarmStatusSensor[(byte)intIdRequested];
-    Serial.print("Sensor Motion : ");
-  } else {
-    intIdGetAlarm = arrAlarmStatusTamper[(byte)intIdRequested];
-    Serial.print("Sensor Tamper : ");
-  }
-  // Log
-  Serial.print(intIdRequested);
-  Serial.print(" | Status is : ");
-  Serial.println(intIdGetAlarm);
-  // Render Web Page
-  renderWebPageAlarm(intIdGetAlarm);
-  Serial.println("- - - - - END WEB REQUEST");
-}
-
-/*
- * Check status for each motion sensor
- */
-static void handleMotion(void) {
-  // Iteration on each sensor enabled
-  for(int intRowMotion=0;intRowMotion<INT_NB_SENSORS;intRowMotion++){
-    if(arrSensorList[intRowMotion] > 0) {
-      // Get Value for each pin
-      intPinSensorValue = digitalRead(arrBusSensor[intRowMotion]);
-      intPinTamperValue = digitalRead(arrBusTamper[intRowMotion]);
-      // Motion
-      if(intPinSensorValue == 1) {
-        Serial.print("!!! ALARM : Motion detected on : ");
-        Serial.println(arrSensorRoom[intRowMotion]);
-        arrAlarmStatusSensor[intRowMotion] = 0; 
-        enableAlarm();
-      }
-      // Box
-      if(intPinTamperValue == 1) {
-        Serial.print("!!! ALARM : Box open on : ");
-        Serial.println(arrSensorRoom[intRowMotion]);
-        arrAlarmStatusTamper[intRowMotion] = 0;
-        enableAlarm(); 
-      }
+  // BELL BOX : Flash alarm
+  if(intFlagBellBox == 1) {
+    blnBellBoxActivated = 0;
+    for(int i=0;i<INT_NB_SENSORS;i++){  
+      delay(100);
+      mcpEquipements.digitalWrite(INT_BELL_BOX_SIREN, HIGH);
+      delay(100);
+      mcpEquipements.digitalWrite(INT_BELL_BOX_SIREN, LOW);
     }
   }
 }
 
-/*
- * Initialise Led & Buzzer & Sensors
- */
-static void initAlarm(void) {
-  // Initialize Configuration LED = Output & OFF | BUZZER = Output & OFF
-  Serial.println(">>> Led & Buzzer registered as [OUTPUT / OFF]");
-  pinMode(INT_PIN_LED, OUTPUT);
-  pinMode(INT_PIN_BUZZER, OUTPUT);
-  digitalWrite(INT_PIN_BUZZER, LOW); 
-  digitalWrite(INT_PIN_LED, LOW);
-  // Test on startup
-  enableAlarm();
-  // Reset status after 
-  intFlagAlarm = 1;
-  blnAlarmBellActivated = 1;
-  // For each sensor
-  for(int intRow=0;intRow<INT_NB_SENSORS;intRow++){
-    // Log Console
-    Serial.print(">>> Alarm activated on Room : ");
-    Serial.println(arrSensorRoom[intRow]);
-    Serial.println(">>> Register Motion Sensor & Tamper as [INPUT] & [PULL-UP RESISTOR]");  
-    // PIR & TAMPER = INPUT
-    pinMode(arrBusSensor[intRow], INPUT);  
-    pinMode(arrBusTamper[intRow], INPUT);
-    // PIR & TAMPER = PULL-UP RESISTOR ENABLE
-    digitalWrite(arrBusSensor[intRow], HIGH);  
-    digitalWrite(arrBusTamper[intRow], HIGH);
-    // Put the value to OFF
-    arrSensorList[(byte)intRow] = 0;
+// This function allow to administrate the alarm : value = indoor | outdoor | box
+static void getInfoBellAdmin(void) {
+  // Initialize 
+  int intStatusResult = 0;
+  // Parse the Web URL
+  char *ethernetValue = (char *)Ethernet::buffer + pos;
+  char *token = strtok(ethernetValue, STR_WEB_END_PARAMETERS);  // Get everything up to the parameter
+  char *arrValue[1]; // Array for get the values of the parameter
+  strtok_r(token, "?", arrParameter); // Split the data all values after the parameter will be register in the variable
+  char *arrGetParameter = strtok_r(arrParameter[0], "=", arrValue); // Split the data all values after the parameter will be register in the variable
+  // Bell ON
+  if(strstr((char *)Ethernet::buffer + pos, "GET /bell-admin-on") != 0) {
+    intStatusResult = 1; //Serial.print("Bell Admin On ");
+    if(strstr((char *)arrValue[0], "box") != 0) intFlagBellBox = intStatusResult;
+    if(strstr((char *)arrValue[0], "indoor") != 0) intFlagBellIndoor = intStatusResult;
+    if(strstr((char *)arrValue[0], "outdoor") != 0) intFlagBellOutdoor = intStatusResult;
+  }
+  // Bell OFF
+  if(strstr((char *)Ethernet::buffer + pos, "GET /bell-admin-off") != 0) {
+    intStatusResult = 0; //Serial.print("Bell Admin Off ");
+    if(strstr((char *)arrValue[0], "box") != 0) intFlagBellBox = intStatusResult;
+    if(strstr((char *)arrValue[0], "indoor") != 0) intFlagBellIndoor = intStatusResult;
+    if(strstr((char *)arrValue[0], "outdoor") != 0) intFlagBellOutdoor = intStatusResult;
+  }
+  // Bell get status
+  if(strstr((char *)Ethernet::buffer + pos, "GET /bell-admin-position") != 0) {
+    //Serial.print("Bell Status ");
+    if(strstr((char *)arrValue[0], "box") != 0) intStatusResult = intFlagBellBox;
+    if(strstr((char *)arrValue[0], "indoor") != 0) intStatusResult = intFlagBellIndoor;
+    if(strstr((char *)arrValue[0], "outdoor") != 0) intStatusResult = intFlagBellOutdoor;
+  }
+  // Bell get status
+  if(strstr((char *)Ethernet::buffer + pos, "GET /bell-admin-status") != 0) {
+    //Serial.print("Bell Position ");
+    if(strstr((char *)arrValue[0], "box") != 0) intStatusResult = blnBellBoxActivated;
+    if(strstr((char *)arrValue[0], "indoor") != 0) intStatusResult = blnBellOutdoorActivated;
+    if(strstr((char *)arrValue[0], "outdoor") != 0) intStatusResult = blnBellIndoorActivated;
+  }
+  //Serial.println(" Request " + (String)intStatusResult);
+  // Render Web Page
+  renderWebValueBinary(intStatusResult);
+}
+
+// This function allow to administrate the alarm 
+static void getInfoAlarmAdmin(void) {
+  // Initialize 
+  int intStatusResult = 0;
+  char *ethernetValue = (char *)Ethernet::buffer + pos;
+  // Alarm ON
+  if(strstr(ethernetValue, "GET /alarm-admin-on?") != 0) {
+    blnAlarmActivated = true;
+    intStatusResult = 1;
+    //Serial.print("Alarm Admin On ");
+  }
+  // Alarm OFF
+  if(strstr(ethernetValue, "GET /alarm-admin-off?") != 0) {
+    blnAlarmActivated = false; 
+    intFlagAlarm = 1;
+    intStatusResult = 1;
+    //Serial.print("Alarm Admin Off ");
+  }
+  // Alarm All status reseted
+  if(strstr(ethernetValue, "GET /alarm-admin-reset?") != 0) {
+    // Reset all status
+    for(int j=0;j<INT_NB_SENSORS;j++){
+      arrAlarmStatusSensor[j] = 1;
+      arrAlarmStatusTamper[j] = 1;
+    }
+    // Reset
+    intIdGetAlarm = 1;
+    intFlagAlarm = 1;
+    blnBellBoxActivated = 1;
+    intStatusResult = 1;
+    //Serial.print("Alarm Admin Reset ");
+  }
+  // Alarm get status
+  if(strstr(ethernetValue, "GET /alarm-admin-status?") != 0) {
+    intStatusResult = 0; 
+    if(blnAlarmActivated == true) intStatusResult = 1;
+    //Serial.print("Alarm Admin Status ");
+  }
+  //Serial.println(" Request " + (String)intStatusResult);
+  // Render Web Page
+  renderWebValueBinary(intStatusResult);
+}
+
+// This function include all actions for motion
+static void getInfoEquipements(void) {
+  // Variable
+  int intStatusMotion = 0;
+  // Parse the Web URL
+  char *ethernetValue = (char *)Ethernet::buffer + pos;
+  char *token = strtok(ethernetValue, STR_WEB_END_PARAMETERS);  // Get everything up to the parameter
+  char *arrValue[1]; // Array for get the values of the parameter
+  strtok_r(token, "?", arrParameter); // Split the data all values after the parameter will be register in the variable
+  char *arrGetParameter = strtok_r(arrParameter[0], "=", arrValue); // Split the data all values after the parameter will be register in the variable
+  // Convertion String to Integer with a cast in char *
+  intIdRequested = atoi((char *)arrValue[0]);
+  // Put Sensor OFF
+  if(strstr(ethernetValue, "GET /motion-admin-off") != 0) {
+    intStatusMotion = 0;
+    arrSensorList[(byte)intIdRequested] = intStatusMotion; 
+    //Serial.print("Motion Admin Off ");
+  }
+  // Put Sensor ON
+  if(strstr(ethernetValue, "GET /motion-admin-on") != 0) {
+    intStatusMotion = 1;
+    arrSensorList[(byte)intIdRequested] = intStatusMotion; 
+    //Serial.print("Motion Admin On ");
+  }
+  // Get Sensor status
+  if(strstr(ethernetValue, "GET /motion-admin-position") != 0) {
+    intStatusMotion = arrSensorList[(byte)intIdRequested];
+    //Serial.print("Motion Position ");
+  }
+  // Get Sensor status
+  if(strstr(ethernetValue, "GET /motion-admin-status") != 0) {
+    // If Motion 
+    if(strstr(arrGetParameter, "M") != 0) {
+      intStatusMotion = arrAlarmStatusSensor[(byte)intIdRequested];
+    } else {
+      intStatusMotion = arrAlarmStatusTamper[(byte)intIdRequested];
+    }
+    //Serial.print("Motion Status ");
+  }
+  //Serial.println("Requested : " + (String)intIdRequested + " ; Value : " + (String)intStatusMotion + " ; Parameters : " + (String)arrGetParameter);
+  // Render Web Page
+  renderWebValueBinary(intStatusMotion);
+}
+
+// Check All motion
+static void handleAlarm(void) {
+  // Iteration on each sensor enabled
+  for(int intRowMotion=0;intRowMotion<INT_NB_SENSORS;intRowMotion++){
+    // MOTION
+    if(arrSensorList[intRowMotion] > 0) {
+      // Get Value for each pin
+      intPinSensorValue = mcpEquipements.digitalRead(arrBusSensor[intRowMotion]);
+      intPinTamperValue = mcpEquipements.digitalRead(arrBusTamper[intRowMotion]);
+      // Motion
+      if(intPinSensorValue == 1) {
+        //Serial.print(">>> Motion detected on ");Serial.println(arrSensorRoom[intRowMotion]);
+        arrAlarmStatusSensor[intRowMotion] = 0; 
+        activeBell();
+      }
+      // Box
+      if(INT_ALARM_CHECK_TAMPER == 1) {
+        if(intPinTamperValue == 0) {
+          arrAlarmStatusTamper[intRowMotion] = 0;
+          activeBell(); 
+        }
+      }
+    }
+  }
+  
+  // OUTDOOR : Tamper
+  if(intFlagBellOutdoor == 1) {
+    intPinSensorValue = mcpEquipements.digitalRead(INT_BELL_OUTDOOR_TAMPER);
+    if(intPinSensorValue == 0) {
+      //Serial.println(">>> Box Open on Siren Outdoor");
+      blnBellOutdoorActivated = 0; 
+      activeBell();
+    }
   }
 }
 
+// Initialise Pin
+static void initAlarm(void) {
+  // BELL BOX
+  mcpEquipements.pinMode(INT_BELL_BOX_SIREN, OUTPUT);
+  mcpEquipements.digitalWrite(INT_BELL_BOX_SIREN, LOW);
+  // BELL INDOOR
+  mcpEquipements.pinMode(INT_BELL_INDOOR_SIREN, OUTPUT);
+  mcpEquipements.digitalWrite(INT_BELL_INDOOR_SIREN, LOW);
+  // BELL OUTDOOR
+  mcpEquipements.pinMode(INT_BELL_OUTDOOR_LED, OUTPUT);
+  mcpEquipements.digitalWrite(INT_BELL_OUTDOOR_LED, LOW);
+  mcpEquipements.pinMode(INT_BELL_OUTDOOR_SIREN, OUTPUT);
+  mcpEquipements.digitalWrite(INT_BELL_OUTDOOR_SIREN, LOW);
+  mcpEquipements.pinMode(INT_BELL_OUTDOOR_TAMPER, INPUT);
+  mcpEquipements.pullUp(INT_BELL_OUTDOOR_TAMPER, HIGH); 
+  // MOTION
+  for(int intRow=0;intRow<INT_NB_SENSORS;intRow++){
+    // PIR & TAMPER = INPUT
+    mcpEquipements.pinMode(arrBusSensor[intRow], INPUT);  
+    mcpEquipements.pinMode(arrBusTamper[intRow], INPUT);
+    // PIR & TAMPER = PULL-UP RESISTOR ENABLE
+    mcpEquipements.pullUp(arrBusSensor[intRow], HIGH);  
+    mcpEquipements.pullUp(arrBusTamper[intRow], HIGH);
+    // Put the value to OFF
+    arrSensorList[(byte)intRow] = 0;
+  }
+  // Test
+  activeBell();
+  // Reset status after 
+  intFlagAlarm = 1;
+  blnBellBoxActivated = 1;
+  blnBellIndoorActivated = 1;
+  blnBellOutdoorActivated = 1;
+}
 
 /* 
  * -----------------------------------------
  * ---  MAIN
  * -----------------------------------------
  */
-// Configuration
 void setup(void) {
   // start serial port
   Serial.begin(57600);
-  Serial.println("");
   Serial.println("- - - - - - - - - - - - - - -");
-  Serial.print("  ");
-  Serial.print(APP_NAME);
-  Serial.print(" - ");
-  Serial.println(APP_VERSION);
+  Serial.println("  " + (String)APP_NAME + " - " + (String)APP_VERSION);
   Serial.println("- - - - - - - - - - - - - - -");
-  Serial.println("");
-  Serial.println(">>> Start setup....");
-  Serial.println("");
-  // STEP 01 : Initialise Alarm
-  initAlarm();
-  // STEP 02 : Initialize Network
+  // Initialize Network Interface
   initNetwork();
-  // Log
-  Serial.println(">>> ALARM IS OFF  ");
-  Serial.println("");
-  Serial.println(">>> Ended setup....");
-  Serial.println("");
+  // Initialise
+  mcpEquipements.begin();
+  // Initialise pin for Alarm
+  initAlarm();
 }
-
-// Iteration
+ 
 void loop (void) {
   /*
    * NETWORK
    */
-  pos = ether.packetLoop(ether.packetReceive()); 
+  pos = ether.packetLoop(ether.packetReceive());
+  
   /*
    * ALARM
    */ 
@@ -478,33 +482,32 @@ void loop (void) {
     // save value millis() 
     previousMillis = currentMillis;
     // If alarm activated
-    if(blnAlarmActivated == true) handleMotion();
+    if(blnAlarmActivated == true) handleAlarm();
   }
-  // Web Request...for get status on motion
-  if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-status?") != 0) { 
-    sendAlertJeedom();
+  // Web Request...Get Status = On or Off | Reset all value for motion | Manage Position : On or Off
+  if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-admin-") != 0) { 
+    getInfoAlarmAdmin();
+    clearNetworkBuffer();  
+  }
+  // Web Request...Get Status = On or Off | Reset all value for motion | Manage Position : On or Off
+  if(strstr((char *)Ethernet::buffer + pos, "GET /bell-admin-") != 0) { 
+    getInfoBellAdmin();
+    clearNetworkBuffer();  
+  }
+  // Web Request...Get Status = Intrusion or not | Get Position = Active or Disabled | Manage Position : On or Off
+  if(strstr((char *)Ethernet::buffer + pos, "GET /motion-admin-") != 0) { 
+    getInfoEquipements();
     clearNetworkBuffer();
     // For stop the Bell
     if(intFlagAlarm == 0) {
       intFlagAlarm = 1;
     }   
   }
-  // Web Request...Manage position of Motion Sensor
-  if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-motion") != 0) { 
-    manageMotionPosition();
-    clearNetworkBuffer();    
-  }
-  // Web Request...for turned on
-  if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-turned") != 0) { 
-    manageAlarmPosition();
-    clearNetworkBuffer();  
-  }
   /*
    * TEMPERATURE
    */
-  if(strstr((char *)Ethernet::buffer + pos, "GET /sonde?") != 0) { 
-    blnTemp = true;
-    handleTemperature();
+  if(strstr((char *)Ethernet::buffer + pos, "GET /sonde-dallas?") != 0) { 
+    getTemperature();
     clearNetworkBuffer();
   }
 }
