@@ -1,5 +1,51 @@
 /**************** RELEASE NOTES ****************/
 /*
+2.4 | 2015-06-21 | Size = 23 052 octects
+   - Update management for MCP 23017 for Sensor Motion
+     * Pin 0 > To enable or disable Zone A
+     * Pin 1 > To enable or disable Zone B
+     * Pin 2 > To enable or disable Zone C
+     * Pin 3 > To enable or disable Zone D
+   - Update management for MCP 23017 for Alarm
+     * Pin 4 > To enable Alarm   
+   - Update management for MCP 23017 for Siren
+     * Pin 5 > To enable Siren Box 
+     * Pin 6 > To enable Siren Indoor
+     * Pin 7 > To enable Siren Outdoor
+   - Add n x led for status motion on MCP 0x21 : Pin 0 -> Pin 4
+   - Initialise Pin 0 -> Pin 3 as OUTPUT & LOW
+
+2.3 | 2015-06-03 | Size = 23 090 octects
+   - Add New MCP 23017 (Addr = 0x21) to manage the sensor & alarm activation by just a jumper
+     * Pin 0 > To enable or disable Sensor Motion
+     * Pin 1 > To enable Tamper Box (Not used yet ; in next version)
+     * Pin 2 > To enable Siren Box 
+     * Pin 3 > To enable Siren Indoor
+     * Pin 4 > To enable Siren Outdoor
+   - Add 2 x leds for status alarm on MCP 0x21 : Pin 8 = Green ; Alarm OFF | Pin 9 = Red ; Alarm ON
+   - Add 1 x led for status alarm on MCP 0x21 : Pin 15 - Id Pin Sensor = Green ; Equipement Enable
+   - Add 1 x led for status alarm on MCP 0x21 : Pin 15 - Id Pin Siren Indoor = Green ; Equipement Enable
+   - Add 1 x led for status alarm on MCP 0x21 : Pin 15 - Id Pin Siren Outdoor = Green ; Equipement Enable
+   - By default : All motion sensor, siren indoor and outdoor are not used
+   - By default : Siren Box is enabled
+   - In function initAlarm() : Check value on MCP23017 0x21
+   - In function loop() : Check every x seconds the values on MCP23017 0x21
+
+2.2 | 2015-03-28 | Size = 22 602 octects
+   - /!\ Fix : Initialise input of Siren to HIGH (inactive, normal position) in function initAlarm()
+   - /!\ Fix : Siren was not stopped when request received in function getInfoAlarmAdmin()
+   - /!\ Fix : Bad status return for Bell outdoor, red value on the pin in function getInfoBellAdmin()
+
+2.1 | 2015-03-15 | Size = 22 582 octects
+   - Manage Outdoor siren :
+     * Pin 12 > Check Tamper or inner plate is removed >>> 1 = ALERT | 0 = OK
+     * Pin 13 > Check Floam Tamper >>> 1 = ALERT | 0 = OK
+     * Pin 14 > Alarm Activation (Siren & Strobo) >>> 1 = ALERT | 0 = OK
+     * Pin 15 > Check Trouble signal for Battery >>> 1 = ALERT | 0 = OK
+   - By default now check Tamper is enable for Motion Sensor
+   - Update URL for Bell like this : [bell]-admin-[position|status|outdoor] > specific check for outdoor
+   - Add new check "/bell-admin-outdoor" > for manage status for tamper | tamper-floam | battery signal on Bell outdoor
+
 2.0 | 2015-02-21 | Size = 22 374 octects
    - Rebuild the program : more simply
    - Reformat the URL for Motion & Alarm & Bell like this : [motion|alarm|bell]-admin-[off|on|position|status] 
@@ -56,7 +102,7 @@
 #include <Adafruit_MCP23017.h>
 
 #define APP_NAME "ardui HomeSecurity"
-#define APP_VERSION "v2.0"
+#define APP_VERSION "v2.4"
 
 #define INT_NB_SENSORS 3
 
@@ -178,19 +224,31 @@ static void getTemperature(void){
  */
 // MCP
 Adafruit_MCP23017 mcpEquipements;
-  
+Adafruit_MCP23017 mcpJumper;
+// Max Pin Numer MCP
+#define INT_MCP_MAX_PIN 15
+// Jumper
+#define INT_JUMPER_ALARM 4
+#define INT_JUMPER_SIREN_BOX 5
+#define INT_JUMPER_SIREN_INDOOR 6
+#define INT_JUMPER_SIREN_OUTDOOR 7
+// Jumper Led Status alarma
+#define INT_JUMPER_ALARM_OFF 8
+#define INT_JUMPER_ALARM_ON 9
+
 // Varialbes
 int arrAlarmStatusSensor[INT_NB_SENSORS] ={1, 1, 1}; // Statut du capteur 1 = OK ; 0 = KO
 int arrAlarmStatusTamper[INT_NB_SENSORS] ={1, 1, 1}; // Statut du capteur 1 = OK ; 0 = KO
 int arrSensorList[INT_NB_SENSORS] ={1, 1, 1}; // List Sensor Enabled
 int arrBusSensor[INT_NB_SENSORS] = {0, 2, 4}; // Connection Bus ID for Sensor
 int arrBusTamper[INT_NB_SENSORS] = {1, 3, 5}; // Connection Bus ID for Tamper
-String arrSensorRoom[INT_NB_SENSORS] = {"Salon","Cuisine","Couloir"}; // List Sensor Name
+String arrSensorRoom[INT_NB_SENSORS] = {"Piece 1","Piece 2","Piece 3"}; // List Sensor Name
 
 // Bell OutDoor
-#define INT_BELL_OUTDOOR_TAMPER 13
-#define INT_BELL_OUTDOOR_LED 14
-#define INT_BELL_OUTDOOR_SIREN 15
+#define INT_BELL_OUTDOOR_TAMPER 12
+#define INT_BELL_OUTDOOR_TAMPER_FLOAM 13
+#define INT_BELL_OUTDOOR_SIREN_STROBO 14
+#define INT_BELL_OUTDOOR_BATTERY_SIGNAL 15
 // Bell InDoor
 #define INT_BELL_INDOOR_LED 10
 #define INT_BELL_INDOOR_SIREN 11
@@ -201,16 +259,16 @@ String arrSensorRoom[INT_NB_SENSORS] = {"Salon","Cuisine","Couloir"}; // List Se
 long previousMillis = 0;
 long intIntervalMotion = 200;
 // Put this value to 1 if you want to use the tamper
-#define INT_ALARM_CHECK_TAMPER 0
+#define INT_ALARM_CHECK_TAMPER 1
 // Variables
 boolean blnAlarmActivated = false;
-int blnBellBoxActivated = 1;
-int blnBellOutdoorActivated = 1;
-int blnBellIndoorActivated = 1;
+int blnBellBoxActivated = 0;
+int blnBellOutdoorActivated = 0;
+int blnBellIndoorActivated = 0;
 // for Bell
-int intFlagBellBox = 1;
-int intFlagBellIndoor = 0;
-int intFlagBellOutdoor = 0;
+int intFlagBellBox;
+int intFlagBellIndoor;
+int intFlagBellOutdoor;
 // For Alarm
 int intIdGetAlarm = 1;
 int intFlagAlarm = 1;
@@ -226,14 +284,13 @@ static void activeBell(void) {
   // BELL INDOOR
   if(intFlagBellIndoor == 1) {
     blnBellIndoorActivated = 0;
-    mcpEquipements.digitalWrite(INT_BELL_OUTDOOR_LED, HIGH);
-    mcpEquipements.digitalWrite(INT_BELL_OUTDOOR_SIREN, HIGH);
+    mcpEquipements.digitalWrite(INT_BELL_INDOOR_LED, LOW);
+    mcpEquipements.digitalWrite(INT_BELL_INDOOR_SIREN, LOW);
   }
   // BELL OUTDOOR
   if(intFlagBellOutdoor == 1) {
     blnBellOutdoorActivated = 0;
-    mcpEquipements.digitalWrite(INT_BELL_INDOOR_LED, HIGH);
-    mcpEquipements.digitalWrite(INT_BELL_INDOOR_SIREN, HIGH);
+    mcpEquipements.digitalWrite(INT_BELL_OUTDOOR_SIREN_STROBO, LOW);
   }
   // BELL BOX : Flash alarm
   if(intFlagBellBox == 1) {
@@ -271,21 +328,26 @@ static void getInfoBellAdmin(void) {
     if(strstr((char *)arrValue[0], "indoor") != 0) intFlagBellIndoor = intStatusResult;
     if(strstr((char *)arrValue[0], "outdoor") != 0) intFlagBellOutdoor = intStatusResult;
   }
-  // Bell get status
+  // Check if Bell is enabled or disabled
   if(strstr((char *)Ethernet::buffer + pos, "GET /bell-admin-position") != 0) {
     //Serial.print("Bell Status ");
     if(strstr((char *)arrValue[0], "box") != 0) intStatusResult = intFlagBellBox;
     if(strstr((char *)arrValue[0], "indoor") != 0) intStatusResult = intFlagBellIndoor;
     if(strstr((char *)arrValue[0], "outdoor") != 0) intStatusResult = intFlagBellOutdoor;
   }
-  // Bell get status
+  // Check if Bell is activated or not
   if(strstr((char *)Ethernet::buffer + pos, "GET /bell-admin-status") != 0) {
     //Serial.print("Bell Position ");
     if(strstr((char *)arrValue[0], "box") != 0) intStatusResult = blnBellBoxActivated;
-    if(strstr((char *)arrValue[0], "indoor") != 0) intStatusResult = blnBellOutdoorActivated;
-    if(strstr((char *)arrValue[0], "outdoor") != 0) intStatusResult = blnBellIndoorActivated;
+    if(strstr((char *)arrValue[0], "indoor") != 0) intStatusResult = blnBellIndoorActivated;
+    if(strstr((char *)arrValue[0], "outdoor") != 0) intStatusResult = mcpEquipements.digitalRead(INT_BELL_OUTDOOR_SIREN_STROBO);
   }
-  //Serial.println(" Request " + (String)intStatusResult);
+  // For Outdoor Bell > Check 
+  if(strstr((char *)Ethernet::buffer + pos, "GET /bell-admin-outdoor") != 0) {
+    if(strstr((char *)arrValue[0], "tamper") != 0) intStatusResult = mcpEquipements.digitalRead(INT_BELL_OUTDOOR_TAMPER);
+    if(strstr((char *)arrValue[0], "tamper-floam") != 0) intStatusResult = mcpEquipements.digitalRead(INT_BELL_OUTDOOR_TAMPER_FLOAM);
+    if(strstr((char *)arrValue[0], "battery") != 0) intStatusResult = mcpEquipements.digitalRead(INT_BELL_OUTDOOR_BATTERY_SIGNAL);
+  }
   // Render Web Page
   renderWebValueBinary(intStatusResult);
 }
@@ -315,6 +377,8 @@ static void getInfoAlarmAdmin(void) {
       arrAlarmStatusSensor[j] = 1;
       arrAlarmStatusTamper[j] = 1;
     }
+    // Coupe La sirene
+    mcpEquipements.digitalWrite(INT_BELL_OUTDOOR_SIREN_STROBO, HIGH);
     // Reset
     intIdGetAlarm = 1;
     intFlagAlarm = 1;
@@ -348,13 +412,15 @@ static void getInfoEquipements(void) {
   // Put Sensor OFF
   if(strstr(ethernetValue, "GET /motion-admin-off") != 0) {
     intStatusMotion = 0;
-    arrSensorList[(byte)intIdRequested] = intStatusMotion; 
+    arrSensorList[(byte)intIdRequested] = intStatusMotion;
+    mcpJumper.digitalWrite(intIdRequested, LOW); 
     //Serial.print("Motion Admin Off ");
   }
   // Put Sensor ON
   if(strstr(ethernetValue, "GET /motion-admin-on") != 0) {
     intStatusMotion = 1;
-    arrSensorList[(byte)intIdRequested] = intStatusMotion; 
+    arrSensorList[(byte)intIdRequested] = intStatusMotion;
+    mcpJumper.digitalWrite(intIdRequested, HIGH); 
     //Serial.print("Motion Admin On ");
   }
   // Get Sensor status
@@ -379,6 +445,9 @@ static void getInfoEquipements(void) {
 
 // Check All motion
 static void handleAlarm(void) {
+  /*
+   * MOTION
+   */
   // Iteration on each sensor enabled
   for(int intRowMotion=0;intRowMotion<INT_NB_SENSORS;intRowMotion++){
     // MOTION
@@ -388,25 +457,33 @@ static void handleAlarm(void) {
       intPinTamperValue = mcpEquipements.digitalRead(arrBusTamper[intRowMotion]);
       // Motion
       if(intPinSensorValue == 1) {
-        //Serial.print(">>> Motion detected on ");Serial.println(arrSensorRoom[intRowMotion]);
         arrAlarmStatusSensor[intRowMotion] = 0; 
         activeBell();
       }
       // Box
       if(INT_ALARM_CHECK_TAMPER == 1) {
-        if(intPinTamperValue == 0) {
+        if(intPinTamperValue == 1) {
           arrAlarmStatusTamper[intRowMotion] = 0;
           activeBell(); 
         }
       }
     }
   }
-  
-  // OUTDOOR : Tamper
+  /*
+   * OUTDOOR
+   */
   if(intFlagBellOutdoor == 1) {
+    // Tamper
     intPinSensorValue = mcpEquipements.digitalRead(INT_BELL_OUTDOOR_TAMPER);
-    if(intPinSensorValue == 0) {
-      //Serial.println(">>> Box Open on Siren Outdoor");
+    if(intPinSensorValue == 1) {
+      //Serial.println(">>> Tamper activated on Siren Outdoor");
+      blnBellOutdoorActivated = 0; 
+      activeBell();
+    }
+    // Tamper Floam
+    intPinSensorValue = mcpEquipements.digitalRead(INT_BELL_OUTDOOR_TAMPER_FLOAM);
+    if(intPinSensorValue == 1) {
+      //Serial.println(">>> Tamper Floam activated on Siren Outdoor");
       blnBellOutdoorActivated = 0; 
       activeBell();
     }
@@ -415,20 +492,50 @@ static void handleAlarm(void) {
 
 // Initialise Pin
 static void initAlarm(void) {
+  /*
+   * JUMPER LEDS
+   */
+  // Led Motion Sensor
+  mcpJumper.pinMode(0, OUTPUT);
+  mcpJumper.pinMode(1, OUTPUT);
+  mcpJumper.pinMode(2, OUTPUT);
+  mcpJumper.pinMode(3, OUTPUT);
+  mcpJumper.digitalWrite(0, LOW); 
+  mcpJumper.digitalWrite(1, LOW);
+  mcpJumper.digitalWrite(2, LOW); 
+  mcpJumper.digitalWrite(3, LOW);
+  // Led Alarm
+  mcpJumper.pinMode(INT_JUMPER_ALARM_OFF, OUTPUT);
+  mcpJumper.digitalWrite(INT_JUMPER_ALARM_OFF, LOW);
+  mcpJumper.pinMode(INT_JUMPER_ALARM_ON, OUTPUT);
+  mcpJumper.digitalWrite(INT_JUMPER_ALARM_ON, LOW);
+  /*
+   * BELL 
+   */
   // BELL BOX
   mcpEquipements.pinMode(INT_BELL_BOX_SIREN, OUTPUT);
   mcpEquipements.digitalWrite(INT_BELL_BOX_SIREN, LOW);
   // BELL INDOOR
   mcpEquipements.pinMode(INT_BELL_INDOOR_SIREN, OUTPUT);
   mcpEquipements.digitalWrite(INT_BELL_INDOOR_SIREN, LOW);
-  // BELL OUTDOOR
-  mcpEquipements.pinMode(INT_BELL_OUTDOOR_LED, OUTPUT);
-  mcpEquipements.digitalWrite(INT_BELL_OUTDOOR_LED, LOW);
-  mcpEquipements.pinMode(INT_BELL_OUTDOOR_SIREN, OUTPUT);
-  mcpEquipements.digitalWrite(INT_BELL_OUTDOOR_SIREN, LOW);
+  /*
+   * BELL OUTDOOR
+   */
+  // Siren & Strobo
+  mcpEquipements.pinMode(INT_BELL_OUTDOOR_SIREN_STROBO, OUTPUT);
+  mcpEquipements.digitalWrite(INT_BELL_OUTDOOR_SIREN_STROBO, HIGH);
+  // Tamper Floarm
+  mcpEquipements.pinMode(INT_BELL_OUTDOOR_TAMPER_FLOAM, INPUT);
+  mcpEquipements.pullUp(INT_BELL_OUTDOOR_TAMPER_FLOAM, HIGH);
+  // Tamper Signal
   mcpEquipements.pinMode(INT_BELL_OUTDOOR_TAMPER, INPUT);
-  mcpEquipements.pullUp(INT_BELL_OUTDOOR_TAMPER, HIGH); 
-  // MOTION
+  mcpEquipements.pullUp(INT_BELL_OUTDOOR_TAMPER, HIGH);
+  // Battery Signal
+  mcpEquipements.pinMode(INT_BELL_OUTDOOR_BATTERY_SIGNAL, INPUT);
+  mcpEquipements.pullUp(INT_BELL_OUTDOOR_BATTERY_SIGNAL, HIGH);
+  /* 
+   * MOTION
+   */
   for(int intRow=0;intRow<INT_NB_SENSORS;intRow++){
     // PIR & TAMPER = INPUT
     mcpEquipements.pinMode(arrBusSensor[intRow], INPUT);  
@@ -436,16 +543,21 @@ static void initAlarm(void) {
     // PIR & TAMPER = PULL-UP RESISTOR ENABLE
     mcpEquipements.pullUp(arrBusSensor[intRow], HIGH);  
     mcpEquipements.pullUp(arrBusTamper[intRow], HIGH);
-    // Put the value to OFF
-    arrSensorList[(byte)intRow] = 0;
+    // Enable or disable motion sensor
+    arrSensorList[(byte)intRow] = mcpJumper.digitalRead((byte)intRow);
   }
+  // Check if Bell activate
+  intFlagBellBox = mcpJumper.digitalRead(INT_JUMPER_SIREN_BOX);
   // Test
   activeBell();
-  // Reset status after 
+  // Check if Bell activate
+  intFlagBellIndoor = mcpJumper.digitalRead(INT_JUMPER_SIREN_INDOOR);
+  intFlagBellOutdoor = mcpJumper.digitalRead(INT_JUMPER_SIREN_OUTDOOR);
+  // Reset status after > 1 = OK | 0 = KO > ALARM
   intFlagAlarm = 1;
   blnBellBoxActivated = 1;
-  blnBellIndoorActivated = 1;
   blnBellOutdoorActivated = 1;
+  blnBellIndoorActivated = 1;
 }
 
 /* 
@@ -462,9 +574,11 @@ void setup(void) {
   // Initialize Network Interface
   initNetwork();
   // Initialise
-  mcpEquipements.begin();
+  mcpEquipements.begin(0);
+  mcpJumper.begin(1);
   // Initialise pin for Alarm
   initAlarm();
+
 }
  
 void loop (void) {
@@ -481,8 +595,31 @@ void loop (void) {
   if(currentMillis - previousMillis > intIntervalMotion) {
     // save value millis() 
     previousMillis = currentMillis;
+    // LED Siren
+    if(intFlagBellBox == 1 || mcpJumper.digitalRead(INT_JUMPER_SIREN_BOX) == 1) { 
+      mcpJumper.digitalWrite(INT_JUMPER_SIREN_BOX, HIGH);
+    } else {
+      mcpJumper.digitalWrite(INT_JUMPER_SIREN_BOX, LOW);
+    }
+    if(intFlagBellIndoor == 1 || mcpJumper.digitalRead(INT_JUMPER_SIREN_INDOOR) == 1) { 
+      mcpJumper.digitalWrite(INT_JUMPER_SIREN_INDOOR, HIGH);
+    } else {
+      mcpJumper.digitalWrite(INT_JUMPER_SIREN_INDOOR, LOW);
+    }
+    if(intFlagBellOutdoor == 1 || mcpJumper.digitalRead(INT_JUMPER_SIREN_OUTDOOR) == 1) { 
+      mcpJumper.digitalWrite(INT_JUMPER_SIREN_OUTDOOR, HIGH);
+    } else {
+      mcpJumper.digitalWrite(INT_JUMPER_SIREN_OUTDOOR, LOW);
+    }
     // If alarm activated
-    if(blnAlarmActivated == true) handleAlarm();
+    if(blnAlarmActivated == true || mcpJumper.digitalRead(INT_JUMPER_ALARM) == 1) {
+      mcpJumper.digitalWrite(INT_JUMPER_ALARM_ON, HIGH);
+      mcpJumper.digitalWrite(INT_JUMPER_ALARM_OFF, LOW);
+      handleAlarm();
+    } else {
+      mcpJumper.digitalWrite(INT_JUMPER_ALARM_ON, LOW);
+      mcpJumper.digitalWrite(INT_JUMPER_ALARM_OFF, HIGH); 
+    }
   }
   // Web Request...Get Status = On or Off | Reset all value for motion | Manage Position : On or Off
   if(strstr((char *)Ethernet::buffer + pos, "GET /alarm-admin-") != 0) { 
